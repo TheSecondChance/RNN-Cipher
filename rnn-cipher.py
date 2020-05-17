@@ -9,7 +9,7 @@ class RNN_Cipher:
     def __init__(self, use_saved_weights=True):    
         # Hyperparameters
         self.epochs = 4
-        self.learning_rate = 1
+        self.learning_rate = 0.05
         self.initial_weights = 0.5
         self.initial_biases = 0.0
 
@@ -77,8 +77,8 @@ class RNN_Cipher:
                     # Perform concatenation of output from previous iteration and current input
                     x = np.array(np.concatenate((Y, m), axis=None), dtype=np.float32)
                     
-                    x_batch = np.array(np.reshape(x, [1, self.input_size]), dtype=np.float32)
-                    y_batch = np.array(np.reshape(y, [1, self.output_size]), dtype=np.float32)
+                    x_batch = np.array([x], dtype=np.float32)
+                    y_batch = np.array([y], dtype=np.float32)
                     
                     # Calculate feed-forward output from network
                     Y = self.session.run(self.network, feed_dict={self.X: x_batch})
@@ -98,7 +98,6 @@ class RNN_Cipher:
         
         return
             
-
     def EncryptBlock(self, X):
         F1 = tf.sigmoid(tf.matmul(X, self.weights['h1']) + self.biases['b1'])
         V = tf.sigmoid(tf.matmul(F1, self.weights['h2']) + self.biases['b2'])
@@ -117,12 +116,19 @@ class RNN_Cipher:
 
         for block in plaintext_blocks:                            
             x = np.array(np.concatenate((Y, block), axis=None), dtype=np.float32)
-            x_batch = np.array(np.reshape(x, [1, self.input_size]), dtype=np.float32)
+            x_batch = np.array([x], dtype=np.float32)
             
+            # Encrypt one plaintext block
             V, Y = self.session.run(encrypt_block, feed_dict={self.X: x_batch})
-            E = block - Y
-            
+            E = block - Y        
             ciphertext_blocks.append((V, E))
+
+            # One iteration of learning process
+            y_batch = np.array([block], dtype=np.float32)
+            self.session.run(self.optimizer, feed_dict={self.X: x_batch, self.Y: y_batch})
+        
+        # Restore KeyExpansion weights
+        tf.train.Saver().restore(self.session, 'saved_sessions/rnn-cipher')
         
         return ciphertext_blocks
 
@@ -131,14 +137,25 @@ class RNN_Cipher:
         return F2
     
     def Decrypt(self, ciphertext_blocks):
+        # Restore KeyExpansion weights
+        tf.train.Saver().restore(self.session, 'saved_sessions/rnn-cipher')
+        
         plaintext_blocks = []
         decrypt_block = self.DecryptBlock(self.V)
         
+        Y_prev = self.session.run(self.M0)
+
         for block in ciphertext_blocks:
             Y = self.session.run(decrypt_block, feed_dict={self.V: block[0]})
             M = Y + block[1]
             plaintext_blocks.append(M[0])
-        
+
+            # One iteration of learning process
+            X = np.array([np.concatenate((Y_prev[0], M[0]), axis=None)])
+            self.session.run(self.optimizer, feed_dict={self.X: X, self.Y: M})
+            
+            Y_prev = Y
+
         # Convert plaintext blocks to string of bytes
         plaintext_blocks = np.array(np.array(plaintext_blocks) * 255) # Unscale bytes
         plaintext_blocks = np.rint(plaintext_blocks).astype(int) # Convert bytes to int
@@ -152,11 +169,11 @@ if __name__ == '__main__':
     
     x_train, y_train = get_data()
 
-    cipher = RNN_Cipher(False)
+    cipher = RNN_Cipher()
     cipher.KeyExpansion(x_train, y_train)
     
     plaintext = b'Artificial neural networks (ANN) or connectionist systems are computing systems vaguely inspired by the biological neural networks that constitute animal brains.'
-    plaintext = b'AAAAAAAAAAAAAAAAAAAAzzzzzzzzzzzzzzzzzzzAAAAAAAAAAAAAAAAAA'
+    # plaintext = b'AAAAAAAAAAAAAAAAAAAAzzzzzzzzzzzzzzzzzzzzAAAAAAAAAAAAAAAAAAAA'
     plaintext = pad(plaintext, BLOCK_SIZE)
     ciphertext_blocks = cipher.Encrypt(plaintext)
 
