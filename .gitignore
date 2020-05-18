@@ -1,4 +1,5 @@
 venv
 .vscode
-saved_sessions
 __pycache__
+saved_sessions
+dataset.csv

@@ -1,8 +1,9 @@
 import os
 import numpy as np
 import tensorflow as tf
+from Crypto.Util.Padding import pad, unpad
 
-from create_dataset import *
+import dataset
 from graphs import *
 
 class RNN_Cipher:
@@ -41,7 +42,7 @@ class RNN_Cipher:
         self.optimizer = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(self.loss)
 
         # Final output from key expansion process
-        self.M0 = tf.Variable([[0.0, 0.0]], shape=(1,2), dtype=tf.float32)
+        self.M0 = tf.Variable([[0.0] * self.output_size], shape=(1, self.output_size), dtype=tf.float32)
         
         # Initialize global session
         self.isWeightsLoaded = False     
@@ -70,7 +71,7 @@ class RNN_Cipher:
             for epoch in range(self.epochs):
                 print(f'\nEpoch #{epoch + 1}')
                 
-                Y = np.array([0,0], dtype=np.float32)
+                Y = np.array([0.0] * self.output_size, dtype=np.float32)
                 iteration = 0
 
                 for m, y in zip(x_train, y_train):
@@ -97,7 +98,8 @@ class RNN_Cipher:
             print('[*] Weights were saved to a file!')      
         
         return
-            
+    
+    # Encryption computation graph
     def EncryptBlock(self, X):
         F1 = tf.sigmoid(tf.matmul(X, self.weights['h1']) + self.biases['b1'])
         V = tf.sigmoid(tf.matmul(F1, self.weights['h2']) + self.biases['b2'])
@@ -131,7 +133,8 @@ class RNN_Cipher:
         tf.train.Saver().restore(self.session, 'saved_sessions/rnn-cipher')
         
         return ciphertext_blocks
-
+    
+    # Decryption computation graph
     def DecryptBlock(self, V):
         F2 = tf.sigmoid(tf.matmul(V, self.weights['out']) + self.biases['out'])
         return F2
@@ -167,13 +170,18 @@ class RNN_Cipher:
 if __name__ == '__main__':
     BLOCK_SIZE = 2
     
-    x_train, y_train = get_data()
+    # Get training dataset for key expansion
+    if not os.path.exists('dataset.csv'):
+        x_train, y_train = dataset.create(BLOCK_SIZE, 3000)
+        dataset.save((x_train, y_train), 'dataset.csv')
+    else:
+        x_train, y_train = dataset.load('dataset.csv')
 
-    cipher = RNN_Cipher()
+    cipher = RNN_Cipher(False)
     cipher.KeyExpansion(x_train, y_train)
     
     plaintext = b'Artificial neural networks (ANN) or connectionist systems are computing systems vaguely inspired by the biological neural networks that constitute animal brains.'
-    # plaintext = b'AAAAAAAAAAAAAAAAAAAAzzzzzzzzzzzzzzzzzzzzAAAAAAAAAAAAAAAAAAAA'
+    # plaintext = b'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAzzzzzzzzzzzzzzzzzzzzAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
     plaintext = pad(plaintext, BLOCK_SIZE)
     ciphertext_blocks = cipher.Encrypt(plaintext)
 
