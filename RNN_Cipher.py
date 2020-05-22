@@ -10,13 +10,14 @@ class RNN_Cipher:
     def __init__(self, use_saved_weights=True):    
         # Hyperparameters
         self.epochs = 4
-        self.learning_rate = tf.Variable(15.0, shape=[])
+        self.learning_rate = tf.Variable(1.0, shape=[])
         self.initial_weights = 0.5
         self.initial_biases = 0.0
         self.critical_rate = 0.04
 
         # Layers configuration
-        self.layers_config = [4, 4, 2, 1, 2]
+        self.layers_config = [16, 16, 1, 8]
+        self.V_index = self.layers_config.index(1)
         
         # Block size
         self.block_size = self.layers_config[-1]
@@ -27,20 +28,26 @@ class RNN_Cipher:
         self.V = tf.placeholder(tf.float32, [None, 1])
 
         # Neural network weights
-        self.weights = {
-            f'h{i}' : tf.Variable(tf.constant(self.initial_weights, shape=(self.layers_config[i], self.layers_config[i+1])))
-            for i in range(len(self.layers_config) - 3)
-        }
-        self.weights['v'] = tf.Variable(tf.constant(self.initial_weights, shape=(self.layers_config[-3], self.layers_config[-2])))
-        self.weights['out'] = tf.Variable(tf.constant(self.initial_weights, shape=(self.layers_config[-2], self.layers_config[-1])))
+        self.weights = {}
+        for i in range(1, len(self.layers_config)):
+            weights = tf.Variable(tf.constant(self.initial_weights, shape=(self.layers_config[i-1], self.layers_config[i])))
+            if i == self.V_index:
+                self.weights['v'] = weights
+            elif i == len(self.layers_config) - 1:
+                self.weights['out'] = weights
+            else:
+                self.weights[f'h{i}'] = weights
 
         # Neural network biases
-        self.biases = {
-            f'b{i}' : tf.Variable(tf.constant(self.initial_biases, shape=(self.layers_config[i+1],)))
-            for i in range(len(self.layers_config) - 3)
-        }
-        self.biases['v'] = tf.Variable(tf.constant(self.initial_biases, shape=(self.layers_config[-2],)))
-        self.biases['out'] = tf.Variable(tf.constant(self.initial_biases, shape=(self.layers_config[-1],)))
+        self.biases = {}
+        for i in range(1, len(self.layers_config)):
+            biases = tf.Variable(tf.constant(self.initial_biases, shape=(self.layers_config[i],)))
+            if i == self.V_index:
+                self.biases['v'] = biases
+            elif i == len(self.layers_config) - 1:
+                self.biases['out'] = biases
+            else:
+                self.biases[f'b{i}'] = biases
 
         self.network = self.Network(self.X)
         self.loss = tf.losses.mean_squared_error(self.Y, self.Network(self.X))
@@ -63,18 +70,44 @@ class RNN_Cipher:
             tf.train.Saver().restore(self.session, 'saved_sessions/rnn-cipher')
             self.isWeightsLoaded = True
             print('[*] Pretrained session initialized!')
- 
+    
+    def Summary(self):
+        row_format = '{:<20}' * 3
+        header = row_format.format('Слой', 'Размер', 'Число параметров')
+        print('_'*60)
+        print(header)
+        print('='*60)
+        total_params = 0
+        hidden_index = 1
+        for i in range(len(self.layers_config)):
+            if i == 0:
+                print(row_format.format('Входной', self.layers_config[i], 0))
+                print('_'*60)
+            else:
+                params = self.layers_config[i-1] * self.layers_config[i] + self.layers_config[i]
+                total_params += params
+                if i == len(self.layers_config) - 1:              
+                    print(row_format.format('Выходной', self.layers_config[i], params))
+                    print('='*60)
+                else:             
+                    print(row_format.format(f'Скрытый {hidden_index}', self.layers_config[i], params))
+                    print('_'*60)
+                    hidden_index += 1
+        print(f'Всего параметров: {total_params}')
+        print('_'*60)
+
     # Neural network output computation graph
     def Network(self, X):
-        for i in range(len(self.layers_config) - 3):
-            if i == 0:
-                F1 = tf.sigmoid(tf.matmul(X, self.weights['h0']) + self.biases['b0'])
+        H = X
+        for i in range(1, len(self.layers_config)):
+            if i == self.V_index:
+                V = tf.sigmoid(tf.matmul(H, self.weights['v']) + self.biases['v'])
+                H = V
+            elif i == len(self.layers_config) - 1:
+                OUT = tf.sigmoid(tf.matmul(H, self.weights['out']) + self.biases['out'])
             else:
-                F1 = tf.sigmoid(tf.matmul(F1, self.weights[f'h{i}']) + self.biases[f'b{i}'])
-        # F1 = tf.sigmoid(tf.matmul(X, self.weights['h0']) + self.biases['b0'])  
-        V = tf.sigmoid(tf.matmul(F1, self.weights['v']) + self.biases['v'])
-        F2 = tf.sigmoid(tf.matmul(V, self.weights['out']) + self.biases['out'])   
-        return F2
+                H = tf.sigmoid(tf.matmul(H, self.weights[f'h{i}']) + self.biases[f'b{i}'])   
+        return OUT    
     
     def KeyExpansion(self, x_train, y_train):       
         if self.isWeightsLoaded == True:
@@ -114,14 +147,16 @@ class RNN_Cipher:
     
     # Encryption computation graph
     def EncryptBlock(self, X):
-        for i in range(len(self.layers_config) - 3):
-            if i == 0:
-                F1 = tf.sigmoid(tf.matmul(X, self.weights['h0']) + self.biases['b0'])
+        H = X
+        for i in range(1, len(self.layers_config)):
+            if i == self.V_index:
+                V = tf.sigmoid(tf.matmul(H, self.weights['v']) + self.biases['v'])
+                H = V
+            elif i == len(self.layers_config) - 1:
+                OUT = tf.sigmoid(tf.matmul(H, self.weights['out']) + self.biases['out'])
             else:
-                F1 = tf.sigmoid(tf.matmul(F1, self.weights[f'h{i}']) + self.biases[f'b{i}'])    
-        V = tf.sigmoid(tf.matmul(F1, self.weights['v']) + self.biases['v'])
-        F2 = tf.sigmoid(tf.matmul(V, self.weights['out']) + self.biases['out'])
-        return (V, F2)
+                H = tf.sigmoid(tf.matmul(H, self.weights[f'h{i}']) + self.biases[f'b{i}'])   
+        return (V, OUT)
     
     def Encrypt(self, plaintext):
         # Prepare plaintext for encryption
@@ -147,8 +182,8 @@ class RNN_Cipher:
             MSE = self.session.run(self.loss, feed_dict={self.X: x_batch, self.Y: y_batch})
             self.session.run(self.optimizer, feed_dict={self.X: x_batch, self.Y: y_batch})
 
-            # # Adaptation of learning process
-            # self.LearningAdaptation(MSE)
+            # Adaptation of learning process
+            self.LearningAdaptation(MSE)
         
         # Restore KeyExpansion weights
         tf.train.Saver().restore(self.session, 'saved_sessions/rnn-cipher')
@@ -157,15 +192,20 @@ class RNN_Cipher:
     
     # Decryption computation graph
     def DecryptBlock(self, V):
-        F2 = tf.sigmoid(tf.matmul(V, self.weights['out']) + self.biases['out'])
-        return F2
+        H = V
+        for i in range(self.V_index + 1, len(self.layers_config)):
+            if i == len(self.layers_config) - 1:
+                OUT = tf.sigmoid(tf.matmul(H, self.weights['out']) + self.biases['out'])
+            else:
+                H = tf.sigmoid(tf.matmul(H, self.weights[f'h{i}']) + self.biases[f'b{i}'])
+        return OUT
     
     def Decrypt(self, ciphertext_blocks):
         # Restore KeyExpansion weights
         tf.train.Saver().restore(self.session, 'saved_sessions/rnn-cipher')
         
-        # # Restore original learning rate
-        # self.DropAdaptation()
+        # Restore original learning rate
+        self.DropAdaptation()
 
         plaintext_blocks = []
         decrypt_block = self.DecryptBlock(self.V)
@@ -184,8 +224,8 @@ class RNN_Cipher:
             
             Y_prev = Y
 
-            # # Adaptation of learning process
-            # self.LearningAdaptation(MSE)
+            # Adaptation of learning process
+            self.LearningAdaptation(MSE)
 
         # Convert plaintext blocks to string of bytes
         plaintext_blocks = np.array(np.array(plaintext_blocks) * 255) # Unscale bytes
@@ -200,11 +240,10 @@ class RNN_Cipher:
         current_LR = self.session.run(self.learning_rate)
 
         T = delta * self.T_prev + (1 - delta) * MSE
-
         if T <= self.critical_rate:
-            new_LR = current_LR * 2
+            new_LR = current_LR * 2.0
         elif T > self.critical_rate and T > self.T_prev:
-             new_LR = current_LR * 0.9
+            new_LR = current_LR * 0.9
         else:
             new_LR = current_LR
         
@@ -217,25 +256,26 @@ class RNN_Cipher:
         self.session.run(tf.assign(self.learning_rate, 1.0))
 
 if __name__ == '__main__':
-    BLOCK_SIZE = 2
+    BLOCK_SIZE = 8
     
     # Get training dataset for key expansion
     if not os.path.exists('dataset.csv'):
-        x_train, y_train = dataset.create(BLOCK_SIZE, 3000)
+        x_train, y_train = dataset.create(BLOCK_SIZE, 1000)
         dataset.save((x_train, y_train), 'dataset.csv')
     else:
         x_train, y_train = dataset.load('dataset.csv')
 
     cipher = RNN_Cipher(False)
+    cipher.Summary()
     cipher.KeyExpansion(x_train, y_train)
     
     # plaintext = b'Artificial neural networks (ANN) or connectionist systems are computing systems vaguely inspired by the biological neural networks that constitute animal brains.'
-    plaintext = b'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAzzzzzzzzzzzzzzzzzzzzAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+    plaintext = b'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAzzzzzzzzzzzzzzzzzzzz' * 10
     plaintext = pad(plaintext, BLOCK_SIZE)
     
     ciphertext_blocks = cipher.Encrypt(plaintext)
 
-    # plot_ciphertext(ciphertext_blocks)
+    plot_ciphertext(ciphertext_blocks)
 
     decrypted_text = cipher.Decrypt(ciphertext_blocks)
     decrypted_text = unpad(decrypted_text, BLOCK_SIZE)
